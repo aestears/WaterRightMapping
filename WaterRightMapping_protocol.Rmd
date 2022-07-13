@@ -1,0 +1,253 @@
+---
+title: "Water Right Mapping Protocol"
+author: "Alice Stears"
+date: '2022-06-29'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r, echo = FALSE}
+# load packages
+library(tidyverse)
+library(xml2)
+library(sf)
+```
+
+## Phase 1: Extracting and formatting data
+1.1. Sign-in to the State Engineer's Office e-permit database, which is where data will be retrieved
+[https://seoweb.wyo.gov/e-Permit/common/login.aspx?ReturnUrl=%2fe-permit%2f](https://seoweb.wyo.gov/e-Permit/common/login.aspx?ReturnUrl=%2fe-permit%2f). If the option is available, click "Sign off other locations"
+
+1.2. Click the "Search" tab in the upper left corner of the screen. 
+
+1.3. Change the "Search Option" drop-down menu in the upper left corner to the "Find Water Rights (detailed)" option
+
+1.4. There are three data sets, each of which have two data types we need to retrieve for further analysis. Each must be retrieved through a slightly different search query process. These processes are detailed below. 
+
+  + 1.4.1. Type 1: "Point of Use" data
+  
+    - 1.4.1.1. Under the "Find Water Right" heading, click on the "WR Number or Facility Name" tab. At the bottom of the search window, click the button next to "Point of Use Details."
+        
+    - 1.4.1.2. Navigate to the "Location Parameters" tab, and scroll down in the search window to the "Stream Searches" heading. In the "Stream name Searches" drop-down menu, select "Stream Basin." 
+
+     - 1.4.1.3. In the "Stream Name" search box that appears, type the name of the stream in question (e.g. "Clear Creek"), and click "Search Stream." Although not required, if you would like to constrain the results, you can enter Division and District information in drop down menus at the top of this screen before searching for your stream.
+
+      - 1.4.1.4. A list of streams will be returned below the search box. Tick the box next to the row that describes the stream in question (e.g. "Clear Creek, trib. Powder River, trib. Yellowstone River, trib. Missouri River"). You may need to click through several tabs of search results. 
+      
+      - 1.4.1.5. Navigate to the "Water Right Parameters" tab near the top of the page. In the "Diversion Type" drop-down menu, select the data type. This will be either "Stream Diversion," "Reservoir Storage” or "Spring," depending on the data set you are retrieving. In the "Water Right Status" drop-down menu, select "Fully Adjudicated."
+
+      - 1.4.1.6. Navigate to the bottom of the search window, and click "Search."
+      
+      - 1.4.1.7. Download the resulting tabular data by clicking the "Export Excel" button near the top of the page that shows the search results. Save the downloaded file in a folder called "WaterRightData_Raw". Change the file name to something like "SR_POU_WaterRight_ClearCreek.xlsx" The first section indicates the data set (either "SR" for "stream diversion", "RS" for "reservoir," or "SP" for "spring"). "POU" stands for "point of use." The last part of the file name should correspond to the name of the creek, with no spaces or underscores (e.g. "ClearCreek"). 
+      
+      - 1.4.1.8. Open the "SR_POU_WaterRight_Search_Results_ClearCreek.xlsx" file, and convert it to a .csv file type. 
+      
+   + 1.4.2. Type 2: "Point of Diversion or Well" data       
+    * note: If you are on a page showing search results, click the "Search" button in the upper left corner of the screen to return to the main search page. 
+    
+      - 1.4.2.1. Click on the "WR Number or Facility Name" tab, and click the box next to "Point of Diversion or Well Details"
+    
+      - 1.4.2.2. Navigate to the "Location Parameters" tab, and scroll down in the search window to the "Stream Searches" heading. In the "Stream name Searches" drop-down menu, select "Stream Basin." 
+      
+      - 1.4.2.3. In the "Stream Name" search box that appears, type the name of the stream in question (e.g. "Clear Creek"), and click "Search Stream." Although not required, if you would like to constrain the results, you can enter Division and District information in drop down menus at the top of this screen before searching for your stream. 
+      
+      - 1.4.2.4. A list of streams will be returned below the search box. Tic the box next to the row that describes the stream in question (e.g. "Clear Creek, trib. Powder River, trib. Yellowstone River, trib. Missouri River"). You may need to click through several tabs of search results. 
+      
+      - 1.4.2.5. Navigate to the "Water Right Parameters" tab near the top of the page. In the "Diversion Type" drop-down menu, select the data type. This will be either "Stream Diversion," "Reservoir Storage” or "Spring," depending on the data set you are retrieving. In the "Water Right Status" drop-down menu, select "Fully Adjudicated."
+      
+      - 1.4.2.6. Navigate to the bottom of the search window, and click "Search."
+      
+      - 1.4.2.7. Download the resulting tabular data by clicking the "Export Excel" button near the top of the page that shows the search results. Save the downloaded file in a folder called "WaterRightData_Raw". Change the file name to something like "SR_POD_WaterRight_ClearCreek.xlsx" The first section indicates the data set (either "SR" for "stream diversion", "RS" for "reservoir," or "SP" for "spring"). "POD" stands for "point of diversion." The last part of the file name should correspond to the name of the creek, with no spaces or underscores (e.g. "ClearCreek"). 
+      
+      - 1.4.2.8. Open the data file, and convert it to a .csv file type. 
+
+
++ 1.4.3. Repeat steps 1.4.2 for Reservoir and Spring data sets. Follow the same steps outlined above, but in steps 1.4.1.5 and 1.4.2.5, change the "Diversion Type" drop-down menu to say "Reservoir" and then "Spring." Change the names of the downloaded files according to the explanation in sections 1.4.1.7 and 1.4.2.7. 
+
+## Phase 2: Formatting and cleaning data
+
+2.1 Import the data downloaded in the previous step.
+```{r, warning=FALSE}
+## set the working directory to the location of the data files 
+folderName <- "/Users/Alice/Dropbox/ClearCreek_ConsDist/WaterRightData_Raw/"
+setwd(folderName)
+
+## First, import the point of use data
+# for stream reaches
+srPOU <- read.csv("./SR_POU_WaterRight_ClearCreek.csv")
+rsPOU <- read.csv("./RS_POU_WaterRight_ClearCreek.csv")
+spPOU <- read.csv("./SP_POU_WaterRight_ClearCreek.csv")
+# Second, import the point of diversion data 
+srPOD <- read.csv("./SR_POD_WaterRight_ClearCreek.csv")
+rsPOD <- read.csv("./RS_POD_WaterRight_ClearCreek.csv")
+spPOD <- read.csv("./SP_POD_WaterRight_ClearCreek.csv")
+```
+
+2.2 Trim the datasets to have only the columns we want, put all company / land owner data into one "Appropriator" column, and join the POU and POD data on the "WR.Number" and "Appropriator" columns. 
+2.2.1. Stream reach data
+```{r}
+## subset and rename POU data
+srPOU <- srPOU %>% 
+  # get columns we want
+  select("IsActive", "WR.Number",	"PriorityDate", "SummaryWRStatus",	"Company", "FirstName", "LastName", "Twn",	"Rng", "Sec",	"Qtr.Qtr", "Acres", "POUStatus",	"SupplyType") %>% 
+  # put Company, FirstName, and LastName data into one column called "Appropriator" 
+  mutate("Appropriator" = paste0(srPOU$Company, "_", srPOU$FirstName, "_", srPOU$LastName)) %>% 
+  select(-Company, -FirstName, -LastName) %>% 
+  rename("SupplyType_POU" = SupplyType, "Twn_POU" = Twn, "Rng_POU" = Rng, "Sec_POU" = Sec, "Qtr.Qtr_POU" = Qtr.Qtr)
+
+# subset and rename POD data
+srPOD <- srPOD %>% 
+  # get columns we want 
+  select("OrderRecordNum",	"WR.Number", "Company", "FirstName", "LastName", 	"FacilityName",	"Uses", "Total.Flow.CFS...Appropriation.GPM.", "Stream.Source", "Total.Capacity..AF.Yr.",	"Diversion.Capacity.at.Headgate.CFS.",	"SupplyType",	"Longitude", "Latitude") %>% 
+  rename("Total.Flow_CFS" = Total.Flow.CFS...Appropriation.GPM., "Total.Capacity_AF.Yr" = Total.Capacity..AF.Yr., "Diversion.Capacity.at.Headgate_CFS" = Diversion.Capacity.at.Headgate.CFS., "Longitude_POD" = Longitude, "Latitude_POD" = Latitude) %>% 
+  # put Company, FirstName, and LastName data into one column called "Appropriator" 
+  mutate("Appropriator" = paste0(srPOD$Company, "_", srPOD$FirstName, "_", srPOD$LastName)) %>% 
+  select(-Company, -FirstName, -LastName)
+
+## join the srPOU and srPOD data on the WR>Number and Appropriator columns
+srDat <- left_join(srPOU, srPOD, by = c("WR.Number", "Appropriator"))
+```
+2.2.2. Reservoir data
+```{r}
+## subset and rename POU data
+rsPOU <- rsPOU %>% 
+  # get columns we want
+  select("IsActive", "WR.Number",	"PriorityDate", "SummaryWRStatus",	"Company", "FirstName", "LastName", "Twn",	"Rng", "Sec",	"Qtr.Qtr", "Acres", "POUStatus",	"SupplyType") %>% 
+  # put Company, FirstName, and LastName data into one column called "Appropriator" 
+  mutate("Appropriator" = paste0(rsPOU$Company, "_", rsPOU$FirstName, "_", rsPOU$LastName)) %>% 
+  select(-Company, -FirstName, -LastName) %>% 
+  rename("SupplyType_POU" = SupplyType, "Twn_POU" = Twn, "Rng_POU" = Rng, "Sec_POU" = Sec, "Qtr.Qtr_POU" = Qtr.Qtr)
+
+# subset and rename POD data
+rsPOD <- rsPOD %>% 
+  # get columns we want 
+  select("OrderRecordNum",	"WR.Number", "Company", "FirstName", "LastName", 	"FacilityName",	"Uses", "Total.Flow.CFS...Appropriation.GPM.", "Stream.Source", "Total.Capacity..AF.Yr.",	"Diversion.Capacity.at.Headgate.CFS.",	"SupplyType",	"Longitude", "Latitude") %>% 
+  rename("Total.Flow_CFS" = Total.Flow.CFS...Appropriation.GPM., "Total.Capacity_AF.Yr" = Total.Capacity..AF.Yr., "Diversion.Capacity.at.Headgate_CFS" = Diversion.Capacity.at.Headgate.CFS., "Longitude_POD" = Longitude, "Latitude_POD" = Latitude) %>% 
+  # put Company, FirstName, and LastName data into one column called "Appropriator" 
+  mutate("Appropriator" = paste0(rsPOD$Company, "_", rsPOD$FirstName, "_", rsPOD$LastName)) %>% 
+  select(-Company, -FirstName, -LastName)
+
+## join the srPOU and srPOD data on the WR>Number and Appropriator columns
+rsDat <- left_join(rsPOU, rsPOD, by = c("WR.Number", "Appropriator"))
+```
+
+2.2.3. Spring data
+```{r}
+## subset and rename POU data
+spPOU <- spPOU %>% 
+  # get columns we want
+  select("IsActive", "WR.Number",	"PriorityDate", "SummaryWRStatus",	"Company", "FirstName", "LastName", "Twn",	"Rng", "Sec",	"Qtr.Qtr", "Acres", "POUStatus",	"SupplyType") %>% 
+  # put Company, FirstName, and LastName data into one column called "Appropriator" 
+  mutate("Appropriator" = paste0(spPOU$Company, "_", spPOU$FirstName, "_", spPOU$LastName)) %>% 
+  select(-Company, -FirstName, -LastName) %>% 
+  rename("SupplyType_POU" = SupplyType, "Twn_POU" = Twn, "Rng_POU" = Rng, "Sec_POU" = Sec, "Qtr.Qtr_POU" = Qtr.Qtr)
+
+# subset and rename POD data
+spPOD <- spPOD %>% 
+  # get columns we want 
+  select("OrderRecordNum",	"WR.Number", "Company", "FirstName", "LastName", 	"FacilityName",	"Uses", "Total.Flow.CFS...Appropriation.GPM.", "Stream.Source", "Total.Capacity..AF.Yr.",	"Diversion.Capacity.at.Headgate.CFS.",	"SupplyType",	"Longitude", "Latitude") %>% 
+  rename("Total.Flow_CFS" = Total.Flow.CFS...Appropriation.GPM., "Total.Capacity_AF.Yr" = Total.Capacity..AF.Yr., "Diversion.Capacity.at.Headgate_CFS" = Diversion.Capacity.at.Headgate.CFS., "Longitude_POD" = Longitude, "Latitude_POD" = Latitude) %>% 
+  # put Company, FirstName, and LastName data into one column called "Appropriator" 
+  mutate("Appropriator" = paste0(spPOD$Company, "_", spPOD$FirstName, "_", spPOD$LastName)) %>% 
+  select(-Company, -FirstName, -LastName)
+
+## join the srPOU and srPOD data on the WR>Number and Appropriator columns
+spDat <- left_join(spPOU, spPOD, by = c("WR.Number", "Appropriator"))
+```
+
+2.3. Combine all three data types together into one data frame
+```{r}
+spDat$DataSource <- "Spring"
+srDat$DataSource <- "Stream"
+rsDat$DataSource <- "Reservoir"
+
+seoDat <- rbind(spDat, srDat, rsDat)
+```
+
+## Phase 3: Attaching geometry information to the water right data
+In this step, you'll join shapefile data from the PLSS layer (shows the spatial locations of townships, ranges, qtr-qtrs, etc.) to the water right data in order to get a rough draft of the spatial location of each water right. 
+
+3.1. Download the PLSS shapefile with township, rang,e and quarter-quarter infromation ##?? (add the source for this data file)
+```{r}
+# save a character string that gives the file location of the PLSS shapefile folder
+PLSSfile <- "/Users/Alice/Dropbox/ClearCreek_ConsDist/"
+# set the working directory 
+setwd(PLSSfile)
+
+# load the PLSS shapefile
+PLSS <- st_read(dsn = "./BLM_PLSS_QQ_Div2/", layer = "BLM_PLSS_QQ_Div2")
+```
+
+3.2. Ensure that the names of the PLSS data are consistent with the names of the water rght data from the SEO website. 
+```{r}
+names(PLSS)
+names(seoDat)
+# put the township number and direction into one column 
+PLSS$Twn_all <- paste0(PLSS$Twn_no, 
+                      PLSS$Twn_dir)
+# put the range number and direction itno one column 
+PLSS$Rng_all <- paste0(PLSS$Rng_no, 
+                       PLSS$Rng_dir)
+# make the SEO data "Section" column into a character and add a leading 0 if required
+seoDat$Sec_POU <- str_pad(string = as.character(seoDat$Sec_POU),
+                          width = 2, side = "left", pad = 0)
+# remove the "1/4" from the seo qtr_qtr data 
+seoDat$Qtr_Qtr_POU <- str_remove_all(string = seoDat$Qtr.Qtr_POU, 
+            pattern = "[1-9/]++")
+```
+
+3.3 Join the data SEO data with the PLSS layer (by township, range, and quarter-quarter information)
+```{r}
+## now join together 
+allDat <- left_join(seoDat, PLSS, by = c("Twn_POU" = "Twn_all", 
+                               "Rng_POU" = "Rng_all", 
+                               "Sec_POU" = "Section",
+                               "Qtr_Qtr_POU" = "Qtr_Qtr"))
+```
+
+3.4 Address the idiosyncrasies in the Quarter-Quarter data-- 
+a.	Most quarter quarters are recorded as a direction, “NWSW”, while some of them are Lots, “Lot 4”, in which the Qtr_Qtr PLSS attribute will be a number.
+  (none of these in the CCCD dataset)
+b.	Beware that some of the Qtr-Qtr water right information is not consistent.
+  i.	“All” – entire section
+```{r}
+## For the rows of data that have "all" in the qtr-qtr data, replace the spatial data with spatial data for the entire section
+# first, aggregate the PLSS data on the Section scale
+PLSS_sec <- aggregate(PLSS[c("geometry")], 
+                      by = list(Twn_all = PLSS$Twn_all,
+                                Rng_all = PLSS$Rng_all,
+                                Section = PLSS$Section), 
+                      FUN = unique,
+                      do_union = TRUE)
+
+# remove the rows with "all' in the qtr-qtr column from the data.frame
+allDat_temp <- allDat[allDat$Qtr.Qtr_POU != "All",]
+allDat_all <- left_join(x = allDat[allDat$Qtr_Qtr_POU=="All",names(allDat) != "geometry"],
+                        y = PLSS_sec, 
+                        by = c("Twn_POU" = "Twn_all",
+                               "Rng_POU" = "Rng_all",
+                               "Sec_POU" = "Section")
+)
+
+allDat <- rbind(allDat_temp, allDat_all)
+```
+  
+  ii.	N1/2” – entire northern half of section
+  (none of these in the CCCD dataset)
+  iii.	Some are left blank and require SEO e-permit document investigation
+  (CCCD dataset does have these... will leave these as blank for now)
+
+## Phase 4: Mapping water rights, first attempt
+
+4.1 Download a 10m resolution (1/3 arcsecond) DEM for Wyoming. 
+  DEM data is from thhe USGS national map: https://apps.nationalmap.gov/downloader/
+  They can be bulk-downloaded using curl in the unix shell to loop through a text file of urls (this file is called "data.txt" and is in the "DEM_files" subfolder)
+
+
+Phase 3: Mapping the water rights, first trial.
+1.	Download a 10m resolution DEM for Wyoming. Classify hillslope as 30 degrees and more. Create shapefile (polygon) from the classification. This will be the polygon that water rights cannot be mapped over.
+a.	This classification will change when I figure out what is the threshold for irrigating on a hillslope.
+2.	Calculate the shape.area of each water right to be the “Acres” the water right covers in each quarter-quarter. 
+a.	We need to reduce the geometry of each water right from the assigned area of a quarter-quarter (typically 40 acres) to the acres stated on the water right.
+3.	Do not allow water rights with “Supply_Type” == “Original” to overlap. 
