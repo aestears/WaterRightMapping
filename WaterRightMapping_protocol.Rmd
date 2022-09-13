@@ -13,6 +13,8 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(xml2)
 library(sf)
+library(terra)
+library(mapview)
 ```
 
 ## Phase 1: Extracting and formatting data
@@ -163,6 +165,15 @@ srDat$DataSource <- "Stream"
 rsDat$DataSource <- "Reservoir"
 
 seoDat <- rbind(spDat, srDat, rsDat)
+
+# put the township and range data together into one column
+seoDat$TWNSHPLAB <- paste0(str_replace(string = seoDat$Twn_POU, 
+                                       pattern = "^[0]",
+                                       replacement = ""),
+                                     " ", 
+                                     str_replace(string = seoDat$Rng_POU, 
+                                       pattern = "^[0]",
+                                       replacement = ""))
 ```
 
 ## Phase 3: Attaching geometry information to the water right data
@@ -170,6 +181,15 @@ In this step, you'll join shapefile data from the PLSS layer (shows the spatial 
 
 3.1. Download the PLSS shapefile with township, rang,e and quarter-quarter infromation ##?? (add the source for this data file)
 ```{r}
+# Township file 
+TwnDat <- st_read(dsn = "../PLSS_files/BLM_-_PLSS_Townships/", layer = "BLM_-_PLSS_Townships")
+# reproject
+TwnDat <- st_transform(TwnDat, crs = 6318)
+
+# Sections file
+RngDat <- st_read(dsn = "../PLSS_files/BLM_-_PLSS_Sections/", layer = "BLM_-_PLSS_Sections")
+RngDat <- st_transform(RngDat, crs = 6318)
+
 # save a character string that gives the file location of the PLSS shapefile folder
 PLSSfile <- "/Users/Alice/Dropbox/ClearCreek_ConsDist/"
 # set the working directory 
@@ -231,6 +251,8 @@ allDat_all <- left_join(x = allDat[allDat$Qtr_Qtr_POU=="All",names(allDat) != "g
 )
 
 allDat <- rbind(allDat_temp, allDat_all)
+# make sure "allDat" is in sf format
+allDat <- st_as_sf(allDat)
 ```
   
   ii.	N1/2” – entire northern half of section
@@ -240,9 +262,173 @@ allDat <- rbind(allDat_temp, allDat_all)
 
 ## Phase 4: Mapping water rights, first attempt
 
-4.1 Download a 10m resolution (1/3 arcsecond) DEM for Wyoming. 
-  DEM data is from thhe USGS national map: https://apps.nationalmap.gov/downloader/
+4.1 Limit the potential water right area to land that is <30 degrees in steepness
+4.1.1 Download a 10m resolution (1/3 arcsecond) DEM for Wyoming. 
+  DEM data is from the USGS national map: https://apps.nationalmap.gov/downloader/
   They can be bulk-downloaded using curl in the unix shell to loop through a text file of urls (this file is called "data.txt" and is in the "DEM_files" subfolder)
+  
+```{r, warnings = FALSE}
+# vector of file names
+DEM_names <- list.files("../DEM_files/", pattern = ".tif$")
+# loop through names to load all the files
+## DEM_rasts[[24]] and DEM_rasts[[25]] are the CCCD rasters!
+## so for now, we'll only download these to save time
+# first make a list to hold the rasters
+DEM_rasts <- list()
+# then population the list with the DEM rasters
+for (i in 24:25) {
+   DEM_rasts[[i]] <- terra::rast(x = paste0("../DEM_files/", DEM_names[i]))
+}
+
+```
+
+4.1.2 calculate hillslope for each cell of the DEM
+```{r}
+DEM_slopes <- lapply(X = DEM_rasts[24:25], 
+                     FUN = function(x) terra::terrain(x, v = "slope", neighbors = 8))
+  
+# put the hillsope rasters together into one raster
+slopeRast <- terra::mosaic(DEM_slopes[[1]], DEM_slopes[[2]])
+```
+
+4.1.3 make a shapefile of all of the area with a slope less than 30 deg. 
+```{r}
+# subset the slopeRast raster to show area w/ a slope less than 30 degrees (will have a value of "1")
+goodSlopeRast <- slopeRast < 30
+# trim the raster to the areas that overlap with the water rights
+goodSlopeRast_clip <- goodSlopeRast %>% 
+  #mask(vect(allDat$geometry)) %>% 
+  crop(vect(allDat$geometry), overwrite = TRUE)
+
+# convert the "0" cells to "NA"
+goodSlopeRast_clip[goodSlopeRast_clip == 0] <- NA
+# convert to a shapefile
+goodSlopeShape <- terra::as.polygons(goodSlopeRast_clip)
+# convert shapefile to sf format
+goodSlopeSf <- st_as_sf(goodSlopeShape)
+# reproject to NAD83 (2011) (EPSG 6318)
+goodSlopeSf <- st_transform(goodSlopeSf, crs = 6318)
+```
+
+4.1.4 Trim the mapped water rights (from the PLSS data) to only show area that is less than 30 degrees in steepness
+```{r}
+# trim the water right data so that areas with a slope >30 are excluded
+allDat_flat <- st_intersection(x = allDat, y = goodSlopeSf)
+```
+
+
+4.2. Check if there are water rights where the PLSS area is *smaller* than the area attributed to the water right, and flag them if they exist.
+```{r}
+# check the area of the polygon associated with each water right from the PLSS layer
+allDat_flat$poly_area <- st_area(allDat_flat)
+# this area is in m2, which we need to convert to acres
+allDat_flat$poly_acres <- units::drop_units(allDat_flat$poly_area *.000247105)
+
+# "Flag" any water rights that have an assigned acreage that is larger than the size of the polygon from the PLSS layer (more than an acre larger)
+# make a "flag" column
+allDat_flat$Flag <- as.character(NA)
+allDat_flat[(allDat_flat$Acres - allDat_flat$poly_acres) > 0 & 
+              !is.na(allDat_flat$Acres) & !is.na(allDat_flat$poly_acres),
+            ]$Flag <- 
+  rep(x = c("PLSS polygon is smaller than recorded size of water right"), times = nrow(allDat_flat[(allDat_flat$Acres - allDat_flat$poly_acres) > 0 & 
+              !is.na(allDat_flat$Acres) & !is.na(allDat_flat$poly_acres),
+            ]))
+```
+
+4.3 For those water rights that have no acreage associated with them (i.e. domestic use, etc.), convert the polygons to a point that is located at the centroid of the Quarter-Quarter associated with the right.
+```{r}
+# identify the rights w/ no acreage associated with them
+# but first, assign a unique ID to every polygon to keep track of it
+allDat_flat$uniqueID <- 1:nrow(allDat_flat)
+#break apart the d.f into w/ and w/out acreage
+# data w/ no acreage (or an NA)
+allDat_noAcres <- allDat_flat[allDat_flat$Acres == 0 | 
+                                is.na(allDat_flat$Acres) == TRUE,]
+allDat_acres <- allDat_flat[allDat_flat$Acres > 0 & 
+                                is.na(allDat_flat$Acres) == FALSE,]
+
+# change the geometry data to be a point at the centroid of the polygon
+allDat_noAcres <- st_set_geometry(allDat_flat[allDat_flat$Acres == 0,], 
+                value = st_centroid(allDat_flat[allDat_flat$Acres == 0,]$geometry))
+
+# add the no acres and acres data back together
+allDat_flat <- rbind(allDat_noAcres, allDat_acres)
+```
+
+4.4 Further reduce the size of the water rights so they can't overlap public land (unless they are instream flow rights! (use = "ISF"))
+```{r}
+# download land ownership map
+landUse <- st_read(dsn = "../LandOwnership_files/", layer = "BLM_-_Surface_Management_Agency")
+# reproject the landuse layer
+
+landUse <- st_transform(landUse, crs = 6318)
+
+# see if there are any rights that have acreage associated with them that have instream flow 
+sum(!is.na(str_locate(string = allDat_acres$Uses, pattern = "ISF")))/2
+# if 0, then you can proceed (no instream flow rights!)
+
+# subset the polygon water right data so that it can only be located on private land
+privateLand <- st_make_valid(landUse[landUse$Name == "Private",])
+allDat_private <- st_intersection(x = allDat_flat, y =  privateLand)
+
+mapview(landUse, col.regions = as.factor(landUse$Name)) + mapview(allDat_flat)
+
+```
+
+
+4.5 Reduce the size of the water rights that are overlapping, or that have an assigned area that is much smaller than the area of the PLSS Polygon
+```{r}
+# will need to do this in two steps...first, deal with the polygons that aren't overlapping with other rights, but are too big. Second, deal with polygons that are overlapping, and correctly assign the correct right to the correct location
+# break the dataset into point vs. polygon data for this analysis (points can overlap polygons!)
+allDat_points <- allDat_flat[st_is(allDat_flat, type = "POINT"),]
+  
+allDat_polys <- allDat_flat[st_is(allDat_flat, type = c("POLYGON", "MULTIPOLYGON")),]
+  
+# break the dataset into overlapping and non-overlapping chunks that we'll re-join together later
+# "snap" the edges of adjacent polygons so they don't overlap when there's a tiny overlap (mapping error)
+#
+for (i in 1:nrow(allDat_polys)) {
+  # a vector of the intersection polygons
+  overlapIDs <- which(st_intersects(x = allDat_polys, 
+                y = allDat_polys[i,], sparse = FALSE) == TRUE)
+  if (length(overlapIDs) > 0) {
+    
+  # are there overlaps? (is the length of the overlapIDs vector greater than 0?)
+  uniqueIDs <- allDat_polys[overlapIDs,]$uniqueID
+    # add to a vector of all uniqueIDs of overlapping polygons
+    if (i == 1){
+    overlapIDs_all <- uniqueIDs
+    } else if (i > 1) {
+     overlapIDs_all <- c(overlapIDs_all, uniqueIDs) 
+    }
+  } else {
+    next 
+  }
+}
+
+mapview(allDat_polys[2,], col.regions = "red") + 
+  mapview(allDat_polys[c(5, 613, 615, 618, 620, 626, 628, 631, 633, 1587, 1588, 2392, 2395),], col.regions = "blue") + 
+  mapview(allDat_polys, col.regions = "grey")
+
+
+
+# get a vector of the uniqueIDs for the overlapping polygons
+uniqueIds_overlaps <-unique(overlapIDs_all) 
+
+#put the overlapping polygons into a separate data.frame
+allDat_overs <- allDat_polys[allDat_polys$uniqueID %in% uniqueIds_overlaps,]
+  
+# put the NON overlapping polygons into a separate data.frame
+allDat_noOvers <- allDat_polys[!(allDat_polys$uniqueID %in% uniqueIds_overlaps),]
+
+mapview(allDat_overs, col.regions = "grey") + 
+  mapview(allDat_polys, col.regions = "red") # focal polygon 
+
+overlap_geometries <- allDat_polys[duplicated(allDat_polys$geometry),]$geometry
+
+overlap_polygons <- allDat_polys[allDat_polys$geometry %in% overlap_geometries,]
+```
+
 
 
 Phase 3: Mapping the water rights, first trial.
